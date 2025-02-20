@@ -83,8 +83,6 @@ class Tool_Panel(Ui_MainWindow, QMainWindow):
         发送自定义protobuf消息
         """
         try:
-            # print("当前agent对象类型:", type(self.agent))  # 验证对象类型
-            # print("agent对象方法列表:", dir(self.agent))     # 查看所有可用方法
             # 获取协议ID
             protocol_id = int(self.ui.lineEdit_5.text())
             
@@ -105,12 +103,16 @@ class Tool_Panel(Ui_MainWindow, QMainWindow):
                 raise ValueError(f"无效的协议ID: {protocol_id}")
             message_name = message_class.DESCRIPTOR.name
             print("准备创建protobuf消息")
-            # 创建并发送消息
-            protobuf_data = self.agent.create_protobuf_message(
-                protocol_id, 
-                message_name, 
-                message_data
-            )
+            # 填充消息数据
+            message_obj = message_class()
+            for field_name, value in message_data.items():
+                if hasattr(message_obj, field_name):
+                    setattr(message_obj, field_name, value)
+                else:
+                    raise AttributeError(f"字段 {field_name} 不存在于 {message_class.DESCRIPTOR.name} 协议中")
+            
+            # 序列化消息
+            protobuf_data = self.proto_mapper.serialize_message(message_name,message_obj,is_server=True)
             print("创建protobuf消息成功")
             if protobuf_data:
                 self.agent.send_custom_protobuf(protocol_id, protobuf_data)

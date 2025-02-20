@@ -29,7 +29,7 @@ class SimpleRobot:
             1003: self._handle_login_result,  # GS2CLoginResult
             1005: self._handle_create_result,# GS2CCreateRole
             3001: self._handle_heartbeat,    # GS2CHeartBeat
-            2002: self._handle_enter_scene,  # GS2CEnterScene
+            2014: self._handle_SyncPosQueue,  # GS2CEnterScene
         }
         
         # 协议配置
@@ -96,6 +96,7 @@ class SimpleRobot:
             
         except Exception as e:
             print(f"发送协议包失败: {str(e)}")
+            
             self.close()
 
     def connect(self):
@@ -209,10 +210,10 @@ class SimpleRobot:
         # print(type(data))
         print(f"心跳响应时间: {data.time}")
 
-    def _handle_enter_scene(self, data):
+    def _handle_SyncPosQueue(self, data):
         """进入场景处理（示例）"""
-        print(f"进入场景: {data.scene_id}")
-        self.current_scene = data.scene_id
+        print(f"进入场景: {data}")
+        # self.current_scene = data.scene_id
 
     def start_heartbeat(self):
         """启动心跳定时任务"""
@@ -248,13 +249,13 @@ class SimpleRobot:
             self.login_account,
             # self.C2GSCreateRole,
             lambda: time.sleep(3),
-            self.C2GSSyncPosQueue2,
-            lambda: time.sleep(1),
             self.C2GSSyncPosQueue,
-            lambda: time.sleep(1),
+            lambda: time.sleep(2),
             self.C2GSSyncPosQueue2,
-            lambda: time.sleep(1),
+            lambda: time.sleep(2),
             self.C2GSSyncPosQueue,
+            lambda: time.sleep(2),
+            self.C2GSSyncPosQueue2,
             self.C2GSHeartBeat,
 
 

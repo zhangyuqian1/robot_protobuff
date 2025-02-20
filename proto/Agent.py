@@ -229,31 +229,7 @@ class Agent(object):
             print(f"解析protobuf数据失败: {str(e)}")
             return None, None, None  # 确保异常情况下也返回三个值
 
-    def create_protobuf_message(self, message_id, message_name, message_data):
-        """
-        创建protobuf消息
-        :param message_id: 协议ID (int)
-        :param message_name: protobuf消息名称 (str)
-        :param message_data: 消息数据 (dict)
-        :return: bytes 或 None (如果创建失败)
-        """
-        print(f"create_protobuf_message: {message_name}, {message_data}")
-        try:
-            # 使用proto_mapper序列化消息
-            serialized_data = self.proto_mapper.serialize_message(
-                message_name, 
-                message_data
-            )
-            
-            if serialized_data is None:
-                print(f"Failed to serialize message: {message_name}")
-                return None
-                
-            return serialized_data
-                
-        except Exception as e:
-            print(f"create_protobuf_message error: {e}")
-            return None
+    
 
     def send_custom_protobuf(self, message_id, message_content):
         """完整的消息发送方法"""

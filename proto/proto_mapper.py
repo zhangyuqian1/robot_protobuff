@@ -116,7 +116,7 @@ class ProtobufMapper:
         except Exception as e:
             self.logger.error(f"序列化消息失败: {str(e)}")
             raise
-
+            
     def parse_message(
         self, 
         protocol_id: int, 
