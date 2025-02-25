@@ -2,6 +2,7 @@ import re
 import time
 import threading
 from client import login_pb2, other_pb2, scene_pb2
+from protocol_map_static import ProtocolMap
 
 class GameClient:
     """游戏客户端，实现具体游戏功能"""
@@ -31,6 +32,12 @@ class GameClient:
     def send_message(self, protocol_id, message_class, field_data=None):
         """发送游戏消息"""
         try:
+            # 获取协议名称（无需创建实例，直接调用静态方法）
+            protocol_name = ProtocolMap.get_name(protocol_id)
+            
+            if not protocol_name:
+                raise ValueError(f"未知协议ID: {protocol_id}")
+
             # 创建protobuf对象
             protocol_data = message_class()
             
@@ -142,7 +149,7 @@ class GameClient:
             field_data={'account': account}
         )
         
-        time.sleep(2)
+        
         print(f"[DEBUG] 当前角色数据状态: {self.has_role_data}")
         if not self.has_role_data:
             print("没有账号数据")
@@ -223,21 +230,21 @@ class GameClient:
         # 同步位置
         positions1 = [
             {
-                'pos': {'x': 5743, 'y': 5561, 'face_y': 1100178},
+                'pos': {'x': 5743, 'y': 5561, 'face_y': 1100188},
                 'time': 100
             },
             {
-                'pos': {'x': 5464, 'y': 2964, 'face_y': 1100178}
+                'pos': {'x': 5464, 'y': 2964, 'face_y': 1100188}
             }
         ]
         
         positions2 = [
             {
-                'pos': {'x': 5464, 'y': 2964, 'face_y': 1100178},
+                'pos': {'x': 5464, 'y': 2964, 'face_y': 1100188},
                 'time': 100
             },
             {
-                'pos': {'x': 5743, 'y': 5561, 'face_y': 1100178}
+                'pos': {'x': 5743, 'y': 5561, 'face_y': 1100188}
             }
         ]
         
