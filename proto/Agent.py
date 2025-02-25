@@ -240,6 +240,9 @@ class Agent(object):
         :return: None
         """
         try:
+
+
+            
             # 使用XOR加密消息内容
             cipher = Xor.XORCipher()
             
