@@ -1,12 +1,16 @@
 import random
 import re
 import time
-import threading
+import asyncio
+import logging
 from client import login_pb2, other_pb2, scene_pb2
 from protocol_map_static import ProtocolMap
 
-class GameClient:
-    """游戏客户端，实现具体游戏功能"""
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('AsyncGameClient')
+
+class AsyncGameClient:
+    """异步游戏客户端，实现具体游戏功能"""
     
     def __init__(self, network_manager, protocol_handler):
         self.network = network_manager
@@ -14,6 +18,8 @@ class GameClient:
         self.has_role_data = False
         self.current_scene = None
         self.player_id = None
+        self.heartbeat_task = None
+        self.robot_id = f"Robot_{int(time.time())}_{random.randint(1000, 9999)}"
         
         # 注册协议处理器
         self._register_handlers()
@@ -30,10 +36,10 @@ class GameClient:
         for proto_id, handler in handlers.items():
             self.protocol.register_handler(proto_id, handler)
             
-    def send_message(self, protocol_id, message_class, field_data=None):
-        """发送游戏消息"""
+    async def send_message(self, protocol_id, message_class, field_data=None):
+        """异步发送游戏消息"""
         try:
-            # 获取协议名称（无需创建实例，直接调用静态方法）
+            # 获取协议名称
             protocol_name = ProtocolMap.get_name(protocol_id)
             
             if not protocol_name:
@@ -54,13 +60,15 @@ class GameClient:
             
             # 创建并发送数据包
             packet = self.protocol.create_packet(protocol_id, serialized)
-            if self.network.send_data(packet):
-                print(f"成功发送协议ID: {protocol_id}")
-                return True
-            return False
+            success = await self.network.send_data(packet)
+            
+            if success:
+                logger.debug(f"成功发送协议ID: {protocol_id}")
+            
+            return success
                 
         except Exception as e:
-            print(f"发送消息失败: {str(e)}")
+            logger.error(f"发送消息失败: {str(e)}")
             return False
             
     def _set_message_fields(self, message, field_data):
@@ -89,10 +97,10 @@ class GameClient:
             else:
                 setattr(message, field, value)
                 
-    # 协议处理函数
-    def _handle_login_result(self, data):
+    # 协议处理函数 - 现在是异步函数
+    async def _handle_login_result(self, data):
         """登录结果处理"""
-        print(data)
+        logger.info(f"{self.robot_id} 登录结果: {data}")
         role_blocks = re.findall(r'role_list\s*{([^}]+)}', str(data), re.DOTALL)
         for block in role_blocks:
             pid_match = re.search(r'pid\s*:\s*(\d+)', block)
@@ -100,12 +108,12 @@ class GameClient:
                 self.has_role_data = True
                 pid = int(pid_match.group(1))
                 self.player_id = pid
-                self.login_role(pid)
-                time.sleep(2)
+                await self.login_role(pid)
+                await asyncio.sleep(2)
     
-    def _handle_create_result(self, data):
+    async def _handle_create_result(self, data):
         """创建角色结果处理"""
-        print(data)
+        logger.info(f"{self.robot_id} 创建角色结果: {data}")
         role_blocks = re.findall(r'role\s*{([^}]+)}', str(data), re.DOTALL)
         for block in role_blocks:
             pid_match = re.search(r'pid\s*:\s*(\d+)', block)
@@ -113,21 +121,21 @@ class GameClient:
                 self.has_role_data = True
                 pid = int(pid_match.group(1))
                 self.player_id = pid
-                self.login_role(pid)
-                time.sleep(2)
+                await self.login_role(pid)
+                await asyncio.sleep(2)
 
-    def _handle_heartbeat(self, data):
+    async def _handle_heartbeat(self, data):
         """心跳响应处理"""
-        print(f"心跳响应时间: {data.time}")
+        logger.debug(f"{self.robot_id} 心跳响应时间: {data.time}")
 
-    def _handle_sync_pos_queue(self, data):
+    async def _handle_sync_pos_queue(self, data):
         """进入场景处理"""
-        print(f"进入场景: {data}")
+        logger.info(f"{self.robot_id} 进入场景: {data}")
         
-    # 游戏功能实现
-    def query_login(self):
+    # 游戏功能实现 - 现在是异步函数
+    async def query_login(self):
         """查询登录"""
-        return self.send_message(
+        return await self.send_message(
             protocol_id=1008,
             message_class=login_pb2.C2GSQueryLogin,
             field_data={
@@ -141,31 +149,30 @@ class GameClient:
             }
         )
         
-    def login_account(self):
+    async def login_account(self):
         """登录账号"""
         account = time.strftime("%Y%m%d%H%M%S", time.localtime())+str(random.randint(1000, 9999))
-        result = self.send_message(
+        result = await self.send_message(
             protocol_id=1001,
             message_class=login_pb2.C2GSLoginAccount,
             field_data={'account': account}
         )
         
-        
-        print(f"[DEBUG] 当前角色数据状态: {self.has_role_data}")
+        logger.info(f"{self.robot_id} 当前角色数据状态: {self.has_role_data}")
         if not self.has_role_data:
-            print("没有账号数据")
+            logger.info(f"{self.robot_id} 没有账号数据")
             name = time.strftime("%Y%m%d%H%M%S", time.localtime())
-            print(f"[DEBUG] 创建角色: {name}")
-            self.create_role(name)
-            time.sleep(2)
+            logger.info(f"{self.robot_id} 创建角色: {name}")
+            await self.create_role(name)
+            await asyncio.sleep(2)
         else:
-            print("有账号数据")
+            logger.info(f"{self.robot_id} 有账号数据")
         
         return result
         
-    def create_role(self, name):
+    async def create_role(self, name):
         """创建角色"""
-        return self.send_message(
+        return await self.send_message(
             protocol_id=1003,
             message_class=login_pb2.C2GSCreateRole,
             field_data={
@@ -175,24 +182,24 @@ class GameClient:
             }
         )
         
-    def login_role(self, pid):
+    async def login_role(self, pid):
         """登录角色"""
-        return self.send_message(
+        return await self.send_message(
             protocol_id=1002,
             message_class=login_pb2.C2GSLoginRole,
             field_data={'pid': pid}
         )
         
-    def send_heartbeat(self):
+    async def send_heartbeat(self):
         """发送心跳"""
-        return self.send_message(
+        return await self.send_message(
             protocol_id=3001,
             message_class=other_pb2.C2GSHeartBeat
         )
         
-    def sync_position(self, scene_id, eid, positions):
+    async def sync_position(self, scene_id, eid, positions):
         """同步位置"""
-        return self.send_message(
+        return await self.send_message(
             protocol_id=2005,
             message_class=scene_pb2.C2GSSyncPosQueue,
             field_data={
@@ -204,29 +211,40 @@ class GameClient:
             }
         )
         
-    def start_heartbeat_task(self):
+    async def start_heartbeat_task(self):
         """启动心跳任务"""
-        def heartbeat_task():
-            while self.network.is_alive:
-                self.send_heartbeat()
-                time.sleep(10)
-                
-        thread = threading.Thread(target=heartbeat_task, daemon=True)
-        thread.start()
-        return thread
+        # 取消之前的心跳任务（如果有）
+        if self.heartbeat_task and not self.heartbeat_task.done():
+            self.heartbeat_task.cancel()
+            
+        # 创建新的心跳任务
+        self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        return self.heartbeat_task
         
-    def execute_login_sequence(self):
+    async def _heartbeat_loop(self):
+        """心跳循环"""
+        try:
+            logger.info(f"{self.robot_id} 启动心跳任务")
+            while self.network.is_alive:
+                await self.send_heartbeat()
+                await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            logger.info(f"{self.robot_id} 心跳任务已取消")
+        except Exception as e:
+            logger.error(f"{self.robot_id} 心跳任务异常: {str(e)}")
+        
+    async def execute_login_sequence(self):
         """执行登录流程"""
-        print("开始执行登录流程...")
+        logger.info(f"{self.robot_id} 开始执行登录流程...")
         
         # 查询登录
-        self.query_login()
+        await self.query_login()
         
         # 登录账号
-        self.login_account()
+        await self.login_account()
         
         # 此时应该已经有角色并登录了
-        time.sleep(3)
+        await asyncio.sleep(3)
         
         # 同步位置
         positions1 = [
@@ -250,15 +268,20 @@ class GameClient:
         ]
         
         # 发送位置同步请求
-        self.sync_position(9, 4, positions1)
-        time.sleep(2)
-        self.sync_position(9, 4, positions2)
-        time.sleep(2)
-        self.sync_position(9, 4, positions1)
-        time.sleep(2)
-        self.sync_position(9, 4, positions2)
+        await self.sync_position(9, 4, positions1)
+        await asyncio.sleep(2)
+        await self.sync_position(9, 4, positions2)
+        await asyncio.sleep(2)
+        await self.sync_position(9, 4, positions1)
+        await asyncio.sleep(2)
+        await self.sync_position(9, 4, positions2)
         
         # 启动心跳任务
-        self.start_heartbeat_task()
+        await self.start_heartbeat_task()
         
-        print("登录流程执行完成") 
+        logger.info(f"{self.robot_id} 登录流程执行完成")
+        
+    async def update(self):
+        """更新游戏状态 - 可用于实现自动化操作"""
+        # 这里可以添加定期执行的游戏逻辑
+        pass 
