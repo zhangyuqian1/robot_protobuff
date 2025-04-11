@@ -7,6 +7,7 @@ import os
 from async_network_manager import AsyncNetworkManager
 from async_protocol_handler import AsyncProtocolHandler
 from async_game_client import AsyncGameClient
+import struct
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('AsyncRobot')
@@ -27,7 +28,7 @@ class AsyncRobot:
         
     async def handle_packet(self, packet):
         """处理接收到的数据包"""
-        parsed, name, pid = self.protocol.parse_packet(packet)
+        parsed, name, pid = await self.protocol.parse_packet(packet)
         if parsed:
             await self.protocol.dispatch_protocol(pid, parsed, name)
         
@@ -43,7 +44,8 @@ class AsyncRobot:
                 
             # 启动接收线程
             await self.network.start_receive_loop(self.handle_packet)
-            
+            logger.info("接收循环已启动，等待稳定...")
+            await asyncio.sleep(1)  # 给接收循环一点时间稳定
             # 执行登录流程
             await self.game.execute_login_sequence()
             
@@ -262,6 +264,6 @@ def main():
     else:
         asyncio.run(run_multiple_robots(
             args.host, args.port, args.count, args.batch, args.delay))
-    #python robot_async.py --host 192.168.56.101 --port 7011 --count 1000 --batch 50 --delay 1
+    #python robot_async.py --host 192.168.56.101 --port 7011 --count 1 --batch 1 --delay 1
 if __name__ == "__main__":
     main()    

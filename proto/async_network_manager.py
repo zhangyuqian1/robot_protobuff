@@ -19,6 +19,7 @@ class AsyncNetworkManager:
         self.receive_callback = None
         self.connection_id = None
         self.last_activity = 0
+        self.buffer = bytearray()  # 添加缓冲区
         
     async def connect(self):
         """异步连接到服务器"""
@@ -63,28 +64,54 @@ class AsyncNetworkManager:
             return False
             
     async def receive_data(self, timeout=None):
-        """异步接收数据"""
+        """异步接收数据，使用2字节头的缓冲区累积解包逻辑"""
         if not self.is_alive or not self.reader:
             return None
-            
+        
         try:
-            # 读取4字节的头部，表示包长度
-            header_data = await asyncio.wait_for(
-                self.reader.readexactly(4), timeout)
-            if not header_data or len(header_data) < 4:
+            # 1. 初始化缓冲区（如果尚未定义）
+            if not hasattr(self, 'buffer'):
+                self.buffer = bytearray()
+            
+            # 2. 读取可用数据（非精确读取）
+            data = await asyncio.wait_for(self.reader.read(8192), timeout)
+            
+            if not data:
+                logger.warning("服务器关闭了连接")
+                self.is_alive = False
                 return None
-                
-            # 解析包长度
-            packet_length = struct.unpack(">I", header_data)[0]
             
-            # 读取包体
-            packet_data = await asyncio.wait_for(
-                self.reader.readexactly(packet_length), timeout)
-            
+            # 3. 将新数据添加到缓冲区
+            self.buffer.extend(data)
             self.last_activity = time.time()
-            return header_data + packet_data
             
+            # 4. 处理完整消息包
+            if len(self.buffer) >= 2:
+                # 解析消息长度（前2个字节）
+                msg_len = int.from_bytes(self.buffer[:2], byteorder='big')
+                # 检查是否有完整的消息
+                if len(self.buffer) >= msg_len + 2:
+                    # 提取完整消息包
+                    packet = bytes(self.buffer[:msg_len+2])
+                    # 更新缓冲区，移除已处理的消息
+                    self.buffer = self.buffer[msg_len+2:]
+                    
+                    # 日志记录 - 可以解析更多信息
+                    if len(packet) >= 4:  # 如果包含协议ID
+                        proto_id = int.from_bytes(packet[2:4], byteorder='big')
+                        logger.debug(f"收到完整消息: 长度={msg_len}, 协议ID={proto_id}")
+                    else:
+                        logger.debug(f"收到完整消息: 长度={msg_len}")
+                    
+                    return packet
+                else:
+                    logger.debug(f"数据不足一个完整消息: 需要 {msg_len+2} 字节，当前有 {len(self.buffer)} 字节")
+            
+            # 没有完整消息，返回None
+            return None
+        
         except asyncio.TimeoutError:
+            # 超时不是错误，只是当前没有数据
             return None
         except asyncio.IncompleteReadError:
             logger.warning("连接已关闭")
@@ -92,6 +119,8 @@ class AsyncNetworkManager:
             return None
         except Exception as e:
             logger.error(f"接收数据失败: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.is_alive = False
             return None
             
@@ -108,12 +137,33 @@ class AsyncNetworkManager:
         
         while self.is_alive:
             try:
-                data = await self.receive_data(timeout=1)
-                if data:
+                # 1. 读取一个完整的消息
+                packet = await self.receive_data(timeout=1)
+                
+                # 2. 处理接收到的消息
+                if packet and self.receive_callback:
+                    await self.receive_callback(packet)
+                
+                # 3. 检查并处理缓冲区中的其他完整消息
+                while hasattr(self, 'buffer') and len(self.buffer) >= 2:
+                    msg_len = int.from_bytes(self.buffer[:2], byteorder='big')
+                    if len(self.buffer) < msg_len + 2:
+                        break  # 没有完整消息了
+                    
+                    # 提取下一个完整消息
+                    next_packet = bytes(self.buffer[:msg_len+2])
+                    self.buffer = self.buffer[msg_len+2:]
+                    
+                    # 如果有协议ID，记录日志
+                    if len(next_packet) >= 4:
+                        proto_id = int.from_bytes(next_packet[2:4], byteorder='big')
+                        logger.debug(f"处理缓冲区附加消息: 长度={msg_len}, 协议ID={proto_id}")
+                    
+                    # 处理消息
                     if self.receive_callback:
-                        await self.receive_callback(data)
-                        
-                # 短暂休眠，避免CPU占用过高        
+                        await self.receive_callback(next_packet)
+                
+                # 4. 短暂休眠，避免CPU占用过高
                 await asyncio.sleep(0.01)
                 
             except Exception as e:

@@ -1,131 +1,164 @@
-import struct
-import logging
 import asyncio
-import traceback
-from collections import defaultdict
-import binascii
+import logging
+import concurrent.futures
+from google.protobuf import message as pb_message
+from proto_mapper import ProtobufMapper
+from protocol_map import PROTOCOL_MAP_C2S, protocol_map
+from Xor import XORCipher
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('AsyncProtocolHandler')
-
 class AsyncProtocolHandler:
-    """异步协议处理器，处理游戏协议的序列化和反序列化"""
+    """异步协议处理器，处理协议的序列化与反序列化"""
     
     def __init__(self):
-        # 协议处理器映射表
-        self.handlers = defaultdict(list)
+        self.proto_mapper = ProtobufMapper(cipher_cls=XORCipher)
+        self.cipher = XORCipher()
+        self.protocol_handlers = {}
+        self._protobuf_initialized = False
+        # 创建线程池执行器
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor()
         
-    def register_handler(self, protocol_id, handler):
-        """注册协议处理器"""
-        self.handlers[protocol_id].append(handler)
-        logger.debug(f"注册协议处理器: ID={protocol_id}")
+    async def init_protobuf(self):
+        """异步初始化protobuf相关配置"""
+        if self._protobuf_initialized:
+            return
+            
+        try:
+            # 使用run_in_executor替代to_thread
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(self._thread_pool, self.proto_mapper.load_proto_files)
+            self._protobuf_initialized = True
+        except Exception as e:
+            logger.error(f"加载proto文件失败: {str(e)}")
+            raise
+            
+    async def register_handler(self, proto_id, handler):
+        """注册协议处理函数 - 保持同步以兼容现有代码"""
+        self.protocol_handlers[proto_id] = handler
+        logger.debug(f"注册协议处理器: ID={proto_id}")
         
-    def unregister_handler(self, protocol_id, handler=None):
-        """注销协议处理器"""
-        if handler:
-            if protocol_id in self.handlers:
-                try:
-                    self.handlers[protocol_id].remove(handler)
-                except ValueError:
-                    pass
-        else:
-            self.handlers[protocol_id] = []
+    async def serialize_message(self, protocol_id, data, is_client_proto=True):
+        """异步序列化消息"""
+        if not self._protobuf_initialized:
+            await self.init_protobuf()
             
-    def serialize_message(self, protocol_id, data):
-        """序列化消息"""
         try:
-            # 将Protobuf对象序列化为二进制数据
-            serialized_data = data.SerializeToString()
-            return serialized_data
+            # 获取协议名称
+            message_name = PROTOCOL_MAP_C2S.get(protocol_id) if is_client_proto else protocol_map.get(protocol_id)
+            if not message_name:
+                raise ValueError(f"未知协议ID: {protocol_id}")
+
+            # 使用run_in_executor替代to_thread
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self._thread_pool, 
+                lambda: self.proto_mapper.serialize_message(
+                    message_name=message_name,
+                    data=data,
+                    is_server=not is_client_proto
+                )
+            )
         except Exception as e:
-            logger.error(f"序列化消息失败: ID={protocol_id}, 错误={str(e)}")
-            logger.error(traceback.format_exc())
-            return None
+            logger.error(f"协议序列化失败: {str(e)}")
+            raise
             
-    def deserialize_message(self, protocol_id, data, message_class):
-        """反序列化消息"""
+    async def create_packet(self, protocol_id, serialized_data):
+        """异步创建完整数据包"""
         try:
-            # 创建协议对象并解析二进制数据
-            message = message_class()
-            message.ParseFromString(data)
-            return message
-        except Exception as e:
-            logger.error(f"反序列化消息失败: ID={protocol_id}, 错误={str(e)}")
-            logger.error(f"数据: {binascii.hexlify(data)}")
-            logger.error(traceback.format_exc())
-            return None
+            # XOR加密处理 - 保持原有逻辑
+            loop = asyncio.get_event_loop()
+            encrypted = await loop.run_in_executor(
+                self._thread_pool,
+                lambda: self.cipher.encode(protocol_id.to_bytes(2, 'big') + serialized_data)
+            )
             
-    def create_packet(self, protocol_id, data):
-        """创建数据包"""
-        try:
-            # 包结构: 总长度(4字节) + 协议ID(4字节) + 协议数据
-            packet_length = len(data) + 4  # 协议ID占4字节
-            header = struct.pack(">II", packet_length, protocol_id)
-            return header + data
+            # 构造完整数据包 - 保持原有的2字节长度头
+            return len(encrypted).to_bytes(2, 'big') + encrypted
         except Exception as e:
             logger.error(f"创建数据包失败: {str(e)}")
             return None
+        
+    async def parse_packet(self, packet):
+        """异步解析数据包"""
+        if not self._protobuf_initialized:
+            await self.init_protobuf()
             
-    def parse_packet(self, packet):
-        """解析数据包"""
         try:
-            if len(packet) < 8:  # 至少需要8字节(长度+协议ID)
-                logger.warning(f"包数据不完整: {len(packet)}字节")
-                return None, None, None
-                
-            # 解析包头
-            length_bytes = packet[0:4]
-            pid_bytes = packet[4:8]
-            
-            packet_length = struct.unpack(">I", length_bytes)[0]
-            protocol_id = struct.unpack(">I", pid_bytes)[0]
-            
-            # 检查包长度
-            if len(packet) != packet_length + 4:  # +4是因为长度字段本身
-                logger.warning(f"包长度不匹配: 预期={packet_length+4}, 实际={len(packet)}")
-                return None, None, None
-                
-            # 获取协议数据
-            protocol_data = packet[8:]
-            
-            # 获取协议名称
-            from protocol_map_static import ProtocolMap
-            protocol_name = ProtocolMap.get_name(protocol_id)
-            
-            return protocol_data, protocol_name, protocol_id
-            
+            # 使用run_in_executor替代to_thread
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                self._thread_pool,
+                lambda: self.proto_mapper.parse_packet_server(packet, is_server=True)
+            )
         except Exception as e:
             logger.error(f"解析数据包失败: {str(e)}")
-            logger.error(traceback.format_exc())
             return None, None, None
             
-    async def dispatch_protocol(self, protocol_id, data, protocol_name=None):
-        """异步分发协议处理"""
-        if protocol_id not in self.handlers:
-            return False
+    async def dispatch_protocol(self, proto_id, data, proto_name):
+        """异步协议分发"""
+        handler = self.protocol_handlers.get(proto_id)
+        if not handler:
+            # logger.warning(f"未注册的协议处理: [{proto_id}]{proto_name}")
+            return 
             
         try:
-            # 获取协议处理器
-            handlers = self.handlers[protocol_id]
+            # logger.info(f"处理协议[{proto_id}]{proto_name}")
             
-            # 分发到所有注册的处理器
-            tasks = []
-            for handler in handlers:
-                # 检查处理器是否是异步函数
-                if asyncio.iscoroutinefunction(handler):
-                    tasks.append(asyncio.create_task(handler(data)))
-                else:
-                    # 如果处理器是同步函数，使用线程池执行
-                    loop = asyncio.get_event_loop()
-                    tasks.append(loop.run_in_executor(None, handler, data))
-                    
-            # 等待所有处理任务完成
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            # 检查处理器是否是协程函数
+            if asyncio.iscoroutinefunction(handler):
+                # 直接调用异步处理器
+                await handler(data)
+            else:
+                # 非异步处理器放在线程池中执行
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(self._thread_pool, handler, data)
                 
-            return True
-            
         except Exception as e:
-            logger.error(f"分发协议处理失败: ID={protocol_id}, 错误={str(e)}")
-            logger.error(traceback.format_exc())
-            return False 
+            logger.error(f"处理协议{proto_id}异常: {str(e)}")
+            
+    async def unpack_data(self, buffer):
+        """异步解包数据，返回完整消息列表和剩余的缓冲区"""
+        messages = []
+        remaining = buffer
+        
+        # 特别保留原有的2字节头长度解包逻辑
+        while len(remaining) >= 2:  # 至少需要2字节头
+            # 读取消息长度
+            msg_len = int.from_bytes(remaining[:2], byteorder='big')
+            
+            # 检查是否有完整消息
+            if len(remaining) >= msg_len + 2:
+                # 提取消息体 (不包括长度字段)
+                message = remaining[2:msg_len+2]
+                messages.append(message)
+                
+                # 移动到下一个消息
+                remaining = remaining[msg_len+2:]
+            else:
+                # 消息不完整，等待更多数据
+                break
+        
+        return messages, remaining
+        
+    async def process_message(self, message):
+        """异步处理单个完整消息"""
+        if not self._protobuf_initialized:
+            await self.init_protobuf()
+            
+        try:
+            # 解析消息
+            parsed_data, proto_name, proto_id = await self.parse_packet(message)
+            
+            if parsed_data and proto_id:
+                # 分发到对应的处理器
+                await self.dispatch_protocol(proto_id, parsed_data, proto_name)
+                return True
+        except Exception as e:
+            logger.error(f"处理消息异常: {str(e)}")
+        
+        return False
+        
+    def __del__(self):
+        """析构函数，关闭线程池"""
+        if hasattr(self, '_thread_pool'):
+            self._thread_pool.shutdown(wait=False) 

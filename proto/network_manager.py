@@ -81,7 +81,7 @@ class NetworkManager:
                         msg_len = int.from_bytes(self.buffer[:2], byteorder='big')
                         if len(self.buffer) < msg_len + 2:
                             break
-                        
+                        print(f"处理完整消息包: {msg_len}")
                         packet = self.buffer[:msg_len+2]
                         self.buffer = self.buffer[msg_len+2:]
                         

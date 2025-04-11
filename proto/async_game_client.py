@@ -21,10 +21,11 @@ class AsyncGameClient:
         self.heartbeat_task = None
         self.robot_id = f"Robot_{int(time.time())}_{random.randint(1000, 9999)}"
         
-        # 注册协议处理器
-        self._register_handlers()
+        # 不能直接在构造函数中调用异步方法
+        # 创建一个协程任务，但不等待它完成
+        self._register_task = asyncio.create_task(self._register_handlers())
         
-    def _register_handlers(self):
+    async def _register_handlers(self):
         """注册所有协议处理器"""
         handlers = {
             1003: self._handle_login_result,
@@ -34,9 +35,10 @@ class AsyncGameClient:
         }
         
         for proto_id, handler in handlers.items():
-            self.protocol.register_handler(proto_id, handler)
+            await self.protocol.register_handler(proto_id, handler)
             
     async def send_message(self, protocol_id, message_class, field_data=None):
+        # logger.info(f"发送消息: {protocol_id}")
         """异步发送游戏消息"""
         try:
             # 获取协议名称
@@ -53,17 +55,16 @@ class AsyncGameClient:
                 self._set_message_fields(protocol_data, field_data)
             
             # 序列化消息
-            serialized = self.protocol.serialize_message(
+            serialized =  await self.protocol.serialize_message(
                 protocol_id=protocol_id,
                 data=protocol_data
             )
             
             # 创建并发送数据包
-            packet = self.protocol.create_packet(protocol_id, serialized)
+            packet = await self.protocol.create_packet(protocol_id, serialized)
             success = await self.network.send_data(packet)
-            
             if success:
-                logger.debug(f"成功发送协议ID: {protocol_id}")
+                logger.info(f"成功发送协议ID: {protocol_id}")
             
             return success
                 
@@ -134,6 +135,7 @@ class AsyncGameClient:
         
     # 游戏功能实现 - 现在是异步函数
     async def query_login(self):
+        logger.info(f"{self.robot_id} 查询登录")
         """查询登录"""
         return await self.send_message(
             protocol_id=1008,
@@ -150,6 +152,7 @@ class AsyncGameClient:
         )
         
     async def login_account(self):
+        logger.info(f"{self.robot_id} 登录账号")
         """登录账号"""
         account = time.strftime("%Y%m%d%H%M%S", time.localtime())+str(random.randint(1000, 9999))
         result = await self.send_message(
@@ -171,6 +174,7 @@ class AsyncGameClient:
         return result
         
     async def create_role(self, name):
+        logger.info(f"开始创建角色: {name}")
         """创建角色"""
         return await self.send_message(
             protocol_id=1003,
