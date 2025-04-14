@@ -266,8 +266,8 @@ class ProtobufMapper:
             return parsed, name, protocol_id
         except Exception as e:
             # raise ParseError(f"Parse packet failed: {str(e)}")
-            print(f"Parse packet failed: {str(e)}")
-
+            # print(f"Parse packet failed: {str(e)}")
+            return None, None, None
     def parse_raw_message(
         self, 
         protocol_id: int,

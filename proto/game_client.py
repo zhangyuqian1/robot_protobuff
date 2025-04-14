@@ -93,15 +93,15 @@ class GameClient:
     def _handle_login_result(self, data):
         """登录结果处理"""
         print(data)
-        role_blocks = re.findall(r'role_list\s*{([^}]+)}', str(data), re.DOTALL)
-        for block in role_blocks:
-            pid_match = re.search(r'pid\s*:\s*(\d+)', block)
-            if pid_match:
-                self.has_role_data = True
-                pid = int(pid_match.group(1))
-                self.player_id = pid
-                self.login_role(pid)
-                time.sleep(2)
+        # role_blocks = re.findall(r'role_list\s*{([^}]+)}', str(data), re.DOTALL)
+        # for block in role_blocks:
+        #     pid_match = re.search(r'pid\s*:\s*(\d+)', block)
+        #     if pid_match:
+        #         self.has_role_data = True
+        #         pid = int(pid_match.group(1))
+        #         self.player_id = pid
+        #         self.login_role(pid)
+        #         time.sleep(2)
     
     def _handle_create_result(self, data):
         """创建角色结果处理"""

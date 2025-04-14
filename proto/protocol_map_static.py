@@ -16,7 +16,8 @@ class ProtocolMap:
         
         # 系统相关
         3001: "C2GSHeartBeat",
-        
+        3002: "C2GSGMCmd",
+        12001: "C2GSChat",
         # 其他必要协议...
         # (只添加真正需要的协议，而不是全部)
     }

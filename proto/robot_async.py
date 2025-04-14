@@ -1,3 +1,4 @@
+import argparse
 import time
 import asyncio
 import logging
@@ -8,6 +9,9 @@ from async_network_manager import AsyncNetworkManager
 from async_protocol_handler import AsyncProtocolHandler
 from async_game_client import AsyncGameClient
 import struct
+import psutil
+import gc
+import platform
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('AsyncRobot')
@@ -18,12 +22,19 @@ class AsyncRobot:
     def __init__(self, host, port, robot_id=None):
         self.host = host
         self.port = port
-        self.robot_id = robot_id or f"Robot_{int(time.time())}_{random.randint(1000, 9999)}"
+        self.robot_id = robot_id or f"Robot_{random.randint(1, 1000)}"
         
-        # 创建模块化组件
-        self.network = AsyncNetworkManager(host, port)
+        # 确保完全独立的组件实例
+        self.network = AsyncNetworkManager(host, port,self.robot_id)
+        
+        # 创建独立的协议处理器，并指定唯一ID
         self.protocol = AsyncProtocolHandler()
-        self.game = AsyncGameClient(self.network, self.protocol)
+        
+        # 传递协议处理器到游戏客户端
+        self.game = AsyncGameClient(self.network, self.protocol, self.robot_id)
+        
+        logger.debug(f"机器人 {self.robot_id} 初始化: 网络组件ID={id(self.network)}, 协议处理器ID={id(self.protocol)}")
+        
         self.is_running = False
         
     async def handle_packet(self, packet):
@@ -44,7 +55,7 @@ class AsyncRobot:
                 
             # 启动接收线程
             await self.network.start_receive_loop(self.handle_packet)
-            logger.info("接收循环已启动，等待稳定...")
+            # logger.info("接收循环已启动，等待稳定...")
             await asyncio.sleep(1)  # 给接收循环一点时间稳定
             # 执行登录流程
             await self.game.execute_login_sequence()
@@ -53,7 +64,7 @@ class AsyncRobot:
             logger.info(f"{self.robot_id} 已启动，运行中...")
             while self.network.is_alive and self.is_running:
                 # 更新游戏状态
-                await self.game.update()
+                # await self.game.update()
                 await asyncio.sleep(1)
                 
         except asyncio.CancelledError:
@@ -80,6 +91,7 @@ class RobotManager:
         self.robots = []
         self.is_running = False
         self.start_time = None
+        self.next_id = 1  # 新增顺序计数器
         
         # 性能指标
         self.metrics = {
@@ -103,9 +115,11 @@ class RobotManager:
                 
                 # 创建并启动当前批次的机器人
                 for j in range(current_batch):
-                    robot_id = f"Robot_{i+j+1}"
                     try:
-                        robot = AsyncRobot(self.host, self.port, robot_id)
+                        robot_id = f"Robot_{self.next_id}"  # 使用顺序ID
+                        # print(f"创建机器人 {robot_id}")
+                        robot = AsyncRobot(self.host, self.port, self.next_id)
+                        self.next_id += 1  # 递增计数器
                         task = asyncio.create_task(robot.run())
                         batch_robots.append((robot, task))
                         self.robots.append((robot, task))
@@ -115,14 +129,14 @@ class RobotManager:
                         self.metrics['failed_robots'] += 1
                 
                 # 打印当前批次信息
-                logger.info(f"已启动批次 {i//batch_size + 1}/{(self.robot_count-1)//batch_size + 1}，"
+                logger.warning(f"已启动批次 {i//batch_size + 1}/{(self.robot_count-1)//batch_size + 1}，"
                           f"当前批次 {current_batch} 个机器人")
                 
                 # 等待指定时间再启动下一批
                 if i + batch_size < self.robot_count:
                     await asyncio.sleep(delay_between_batches)
                     
-            logger.info(f"所有机器人启动完成，总计: {len(self.robots)}")
+            logger.warning(f"所有机器人启动完成，总计: {len(self.robots)}")
             
         except asyncio.CancelledError:
             logger.info("机器人启动过程被取消")
@@ -155,9 +169,29 @@ class RobotManager:
     async def monitor_status(self, interval=5):
         """监控所有机器人状态"""
         try:
+            last_gc_time = time.time()
+            gc_interval = 60  # 至少每60秒执行一次GC
+            
             while self.is_running:
-                # 计算活
-                            # 计算活跃机器人数量
+                # 计算内存使用
+                process = psutil.Process(os.getpid())
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                
+                # 强制GC条件判断优化
+                gc_conditions = [
+                    (time.time() - last_gc_time) > gc_interval,  # 时间间隔条件
+                    memory_mb > 1024 and (memory_mb % 200 < 5),  # 内存量条件
+                    len(gc.garbage) > 100  # 存在未回收垃圾
+                ]
+                
+                if any(gc_conditions):
+                    logger.warning(f"执行垃圾回收(内存:{memory_mb:.1f}MB, 未回收对象:{len(gc.garbage)})")
+                    gc.collect()
+                    gc.garbage.clear()
+                    last_gc_time = time.time()
+                    logger.warning(f"GC后内存:{process.memory_info().rss/1024/1024:.1f}MB")
+                
+                # 计算活跃机器人数量
                 active_count = sum(1 for robot, task in self.robots 
                                   if robot.network.is_alive and not task.done())
                 self.metrics['active_robots'] = active_count
@@ -168,16 +202,13 @@ class RobotManager:
                 
                 # 打印状态信息
                 logger.info(f"状态报告 - 运行时间: {runtime_str}")
-                logger.info(f"已启动: {self.metrics['started_robots']}, "
+                logger.warning(f"\33[91m已启动: {self.metrics['started_robots']}, "
                            f"活跃: {active_count}, "
-                           f"失败: {self.metrics['failed_robots']}")
+                           f"失败: {self.metrics['failed_robots']}\33[0m")
                 
                 # 收集内存使用情况
-                import psutil
-                process = psutil.Process(os.getpid())
-                memory_info = process.memory_info()
-                memory_mb = memory_info.rss / 1024 / 1024
-                logger.info(f"内存使用: {memory_mb:.2f} MB")
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                logger.warning(f"内存使用: {memory_mb:.2f} MB")
                 
                 # 等待下一次监控
                 await asyncio.sleep(interval)
@@ -194,7 +225,6 @@ async def run_multiple_robots(host, port, robot_count=1000, batch_size=50, delay
     
     try:
         # 在Windows上处理信号的替代方案
-        import platform
         if platform.system() != "Windows":
             # 非Windows系统使用标准信号处理
             loop = asyncio.get_running_loop()
@@ -243,8 +273,8 @@ async def run_single_robot(host, port):
         await robot.close()
 
 def main():
-    """主函数，解析参数并运行机器人"""
-    import argparse
+
+    
     
     parser = argparse.ArgumentParser(description='异步游戏机器人')
     parser.add_argument('--host', default='192.168.56.101', help='服务器主机名')

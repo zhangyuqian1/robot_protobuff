@@ -33,7 +33,7 @@ class Tool_Panel(Ui_MainWindow, QMainWindow):
         # agent_port = int(self.ui.lineEdit_2.text())
         agent_port = "7011"
         # server_host = self.ui.lineEdit_3.text()
-        server_host = "192.168.56.101"
+        server_host = "192.168.56.66"
         # server_port = int(self.ui.lineEdit_4.text())
         server_port = 7011
         # 生成Q线程

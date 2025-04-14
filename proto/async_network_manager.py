@@ -10,16 +10,20 @@ logger = logging.getLogger('AsyncNetworkManager')
 class AsyncNetworkManager:
     """异步网络管理器，处理网络连接和数据传输"""
     
-    def __init__(self, host, port):
+    def __init__(self, host, port,robot_id,manager_id=None):
         self.host = host
         self.port = port
-        self.reader = None
+        self.robot_id = robot_id
+        self.manager_id = manager_id or f"net_{id(self)}"  # 添加唯一标识
+        self.reader = None                                           
         self.writer = None
         self.is_alive = False
         self.receive_callback = None
         self.connection_id = None
         self.last_activity = 0
         self.buffer = bytearray()  # 添加缓冲区
+        self._receive_task = None  # 新增任务跟踪
+        self._callback = None      # 使用私有属性存储回调
         
     async def connect(self):
         """异步连接到服务器"""
@@ -93,6 +97,7 @@ class AsyncNetworkManager:
                 if len(self.buffer) >= msg_len + 2:
                     # 提取完整消息包
                     packet = bytes(self.buffer[:msg_len+2])
+                    logger.info(f"{self.robot_id}收到完整消息: {packet}")
                     # 更新缓冲区，移除已处理的消息
                     self.buffer = self.buffer[msg_len+2:]
                     
@@ -126,14 +131,28 @@ class AsyncNetworkManager:
             
     async def start_receive_loop(self, callback):
         """启动异步接收循环"""
-        self.receive_callback = callback
+        # 1. 存储独立的回调函数引用
+        self._callback = callback
         
-        # 启动接收循环任务
-        asyncio.create_task(self._receive_loop())
+        # 2. 取消已有任务(如果存在)
+        if self._receive_task and not self._receive_task.done():
+            logger.debug(f"{self.manager_id}: 取消现有接收任务")
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+        
+        # 3. 创建新任务并添加任务名
+        self._receive_task = asyncio.create_task(self._receive_loop()
+        )
+        
+        # logger.info(f"{self.manager_id}: 启动接收任务 {self._receive_task.get_name()}")
+        return self._receive_task
             
     async def _receive_loop(self):
         """异步接收循环"""
-        logger.info("开始接收数据循环")
+        logger.info(f"开始接收数据循环: {self.manager_id}")
         
         while self.is_alive:
             try:
@@ -141,8 +160,8 @@ class AsyncNetworkManager:
                 packet = await self.receive_data(timeout=1)
                 
                 # 2. 处理接收到的消息
-                if packet and self.receive_callback:
-                    await self.receive_callback(packet)
+                if packet and self._callback:
+                    await self._callback(packet)
                 
                 # 3. 检查并处理缓冲区中的其他完整消息
                 while hasattr(self, 'buffer') and len(self.buffer) >= 2:
@@ -167,7 +186,7 @@ class AsyncNetworkManager:
                 await asyncio.sleep(0.01)
                 
             except Exception as e:
-                logger.error(f"接收循环中出错: {str(e)}")
+                logger.info(f"接收循环中出错: {str(e)}")
                 
                 if not self.is_alive:
                     break
