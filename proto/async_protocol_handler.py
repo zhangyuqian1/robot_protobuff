@@ -7,20 +7,29 @@ from protocol_map import PROTOCOL_MAP_C2S, protocol_map
 from Xor import XORCipher
 import os 
 import time
+import atexit
 
 logger = logging.getLogger('AsyncProtocolHandler')
+
+# 创建全局共享线程池（在模块级别）
+GLOBAL_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=min(32, (os.cpu_count() or 4) * 2),
+    thread_name_prefix="proto_worker"
+)
+
+# 注册程序退出时的清理函数
+atexit.register(lambda: GLOBAL_THREAD_POOL.shutdown(wait=False))
+
 class AsyncProtocolHandler:
-    """异步协议处理器，处理协议的序列化与反序列化"""
+    """异步协议处理器，共享全局线程池"""
     
-    def __init__(self, max_workers=None):
+    def __init__(self):
         self.proto_mapper = ProtobufMapper(cipher_cls=XORCipher)
         self.cipher = XORCipher()
         self.protocol_handlers = {}  # 每个实例独立的处理器映射
         self._protobuf_initialized = False
-        # 创建线程池执行器，限制最大工作线程数
-        self._thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers or min(32, (os.cpu_count() or 1) + 4)
-        )
+        # 使用全局线程池而非创建新的
+        self._thread_pool = GLOBAL_THREAD_POOL
         # 跟踪挂起的任务以确保它们被适当地清理
         self._pending_tasks = set()
         
@@ -35,7 +44,7 @@ class AsyncProtocolHandler:
             return
             
         try:
-            # 使用run_in_executor替代to_thread
+            # 使用共享线程池
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(self._thread_pool, self.proto_mapper.load_proto_files)
             self._protobuf_initialized = True
@@ -197,11 +206,6 @@ class AsyncProtocolHandler:
             await asyncio.gather(*self._pending_tasks, return_exceptions=True)
             self._pending_tasks.clear()
             
-        # 关闭线程池
-        if hasattr(self, '_thread_pool') and self._thread_pool:
-            self._thread_pool.shutdown(wait=True)
-            self._thread_pool = None
-            
     async def __aenter__(self):
         """支持异步上下文管理器"""
         return self
@@ -210,7 +214,4 @@ class AsyncProtocolHandler:
         """异步上下文管理器退出时关闭资源"""
         await self.close()
         
-    def __del__(self):
-        """析构函数，关闭线程池"""
-        if hasattr(self, '_thread_pool') and self._thread_pool:
-            self._thread_pool.shutdown(wait=False) 
+    # 不再需要__del__方法关闭线程池，因为使用的是全局共享池 
